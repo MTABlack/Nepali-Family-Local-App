@@ -1,0 +1,6 @@
+{
+  "name": "Nepali Family Local App",
+  "description": "A community-driven local platform for Nepal focused on mutual aid, local services, jobs, marketplace, agriculture, tourism, and community decision making.",
+  "requestFramePermissions": ["geolocation", "camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,448 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // 1. Global Safety Net: Default-Deny on All Paths
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // ==========================================
+    // GLOBAL HELPERS & PRIMITIVES
+    // ==========================================
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isAdmin() {
+      return isSignedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+
+    // ==========================================
+    // ENTITY VALIDATION BLUEPRINTS
+    // ==========================================
+
+    function isValidUser(data) {
+      return data.userId is string && data.userId.size() <= 128 &&
+             data.fullName is string && data.fullName.size() >= 2 && data.fullName.size() <= 100 &&
+             data.username is string && data.username.size() >= 2 && data.username.size() <= 32 &&
+             data.phoneNumber is string && data.phoneNumber.size() >= 8 && data.phoneNumber.size() <= 15 &&
+             data.province is string && data.province.size() <= 100 &&
+             data.district is string && data.district.size() <= 100 &&
+             data.municipality is string && data.municipality.size() <= 100 &&
+             data.wardNumber is int && data.wardNumber >= 1 && data.wardNumber <= 40 &&
+             data.reputationScore is int && data.reputationScore >= 0 && data.reputationScore <= 100 &&
+             data.verificationStatus is int && data.verificationStatus >= 1 && data.verificationStatus <= 4 &&
+             data.accountStatus is string && (data.accountStatus == 'active' || data.accountStatus == 'suspended' || data.accountStatus == 'under_verification');
+    }
+
+    function isValidVerificationLog(data) {
+      return data.level is int && data.level >= 1 && data.level <= 4 &&
+             data.name is string && data.name.size() <= 100 &&
+             data.method is string && data.method.size() <= 100;
+    }
+
+    function isValidCommunityNode(data) {
+      return data.nodeId is string && data.nodeId.size() <= 128 &&
+             data.province is string &&
+             data.district is string &&
+             data.municipality is string &&
+             data.ward is int && data.ward >= 1 && data.ward <= 40 &&
+             data.localCommunityName is string && data.localCommunityName.size() <= 100 &&
+             data.residentCount is int && data.residentCount >= 0;
+    }
+
+    function isValidChatRoom(data) {
+      return data.roomId is string && data.roomId.size() <= 128 &&
+             data.type is string && (data.type == 'personal' || data.type == 'group' || data.type == 'community') &&
+             data.members is list && data.members.size() >= 1 && data.members.size() <= 1000 &&
+             data.createdBy is string && data.createdBy.size() <= 128;
+    }
+
+    function isValidMessage(data) {
+      return data.messageId is string && data.messageId.size() <= 128 &&
+             data.senderId is string && data.senderId.size() <= 128 &&
+             data.senderName is string && data.senderName.size() <= 100;
+    }
+
+    function isValidServiceProvider(data) {
+      return data.providerId is string && data.providerId.size() <= 128 &&
+             data.userId is string && data.userId.size() <= 128 &&
+             data.name is string && data.name.size() <= 100 &&
+             data.category is string &&
+             data.phone is string && data.phone.size() >= 8 && data.phone.size() <= 15 &&
+             data.serviceArea is list && data.serviceArea.size() >= 1 && data.serviceArea.size() <= 10 &&
+             data.cost is string && data.cost.size() <= 100 &&
+             data.rating is number && data.rating >= 0 && data.rating <= 5 &&
+             data.reviewsCount is int && data.reviewsCount >= 0 &&
+             data.isVerifiedProvider is bool;
+    }
+
+    function isValidReview(data) {
+      return data.reviewId is string && data.reviewId.size() <= 128 &&
+             data.reviewerId is string && data.reviewerId.size() <= 128 &&
+             data.reviewerName is string && data.reviewerName.size() <= 100 &&
+             data.rating is int && data.rating >= 1 && data.rating <= 5 &&
+             data.comment is string && data.comment.size() <= 1000;
+    }
+
+    function isValidMarketplaceListing(data) {
+      return data.listingId is string && data.listingId.size() <= 128 &&
+             data.title is string && data.title.size() >= 3 && data.title.size() <= 150 &&
+             data.description is string && data.description.size() <= 1000 &&
+             data.price is string && data.price.size() <= 100 &&
+             data.category is string &&
+             data.listingType is string && (data.listingType == 'product_sale' || data.listingType == 'rental' || data.listingType == 'exchange') &&
+             data.sellerId is string && data.sellerId.size() <= 128 &&
+             data.sellerName is string && data.sellerName.size() <= 100 &&
+             data.sellerPhone is string && data.sellerPhone.size() >= 8 && data.sellerPhone.size() <= 15 &&
+             data.district is string &&
+             data.availabilityStatus is string && (data.availabilityStatus == 'available' || data.availabilityStatus == 'pending' || data.availabilityStatus == 'sold' || data.availabilityStatus == 'rented' || data.availabilityStatus == 'exchanged');
+    }
+
+    function isValidHelpRequest(data) {
+      return data.requestId is string && data.requestId.size() <= 128 &&
+             data.title is string && data.title.size() >= 3 && data.title.size() <= 150 &&
+             data.description is string && data.description.size() <= 2000 &&
+             data.category is string && (data.category == 'blood' || data.category == 'emergency_sos' || data.category == 'missing_person' || data.category == 'lost_and_found' || data.category == 'community_help') &&
+             data.urgency is string && (data.urgency == 'critical' || data.urgency == 'high' || data.urgency == 'normal') &&
+             data.contactName is string && data.contactName.size() <= 100 &&
+             data.contactPhone is string && data.contactPhone.size() >= 8 && data.contactPhone.size() <= 15 &&
+             data.province is string && data.district is string && data.municipality is string &&
+             data.ward is int && data.ward >= 1 && data.ward <= 40 &&
+             data.status is string && (data.status == 'open' || data.status == 'resolved');
+    }
+
+    function isValidJobListing(data) {
+      return data.jobId is string && data.jobId.size() <= 128 &&
+             data.employerId is string && data.employerId.size() <= 128 &&
+             data.employerName is string && data.employerName.size() <= 100 &&
+             data.title is string && data.title.size() >= 3 && data.title.size() <= 150 &&
+             data.description is string && data.description.size() <= 2000 &&
+             data.payment is string && data.payment.size() <= 100 &&
+             data.type is string && (data.type == 'daily' || data.type == 'part-time' || data.type == 'agricultural' || data.type == 'freelance' || data.type == 'full-time') &&
+             data.skillRequirements is list && data.skillRequirements.size() <= 20;
+    }
+
+    function isValidJobApplication(data) {
+      return data.applicationId is string && data.applicationId.size() <= 128 &&
+             data.jobId is string && data.jobId.size() <= 128 &&
+             data.applicantId is string && data.applicantId.size() <= 128 &&
+             data.applicantName is string && data.applicantName.size() <= 100 &&
+             data.applicantPhone is string && data.applicantPhone.size() >= 8 && data.applicantPhone.size() <= 15 &&
+             data.status is string && (data.status == 'pending' || data.status == 'shortlisted' || data.status == 'accepted' || data.status == 'rejected');
+    }
+
+    function isValidSecurityLog(data) {
+      return data.logId is string && data.logId.size() <= 128 &&
+             data.userId is string && data.userId.size() <= 128 &&
+             data.action is string && (data.action == 'login' || data.action == 'logout' || data.action == 'failed_login' || data.action == 'device_addition' || data.action == 'password_change' || data.action == 'id_verification_submit') &&
+             data.ipAddress is string && data.ipAddress.size() <= 45 &&
+             data.deviceInfo is string && data.deviceInfo.size() <= 256;
+    }
+
+    function isValidReport(data) {
+      return data.reportId is string && data.reportId.size() <= 128 &&
+             data.reporterId is string && data.reporterId.size() <= 128 &&
+             data.reportedEntityId is string && data.reportedEntityId.size() <= 128 &&
+             data.category is string && (data.category == 'login_hijack' || data.category == 'harassment' || data.category == 'marketplace_fraud' || data.category == 'fake_emergency_sos' || data.category == 'unverified_information_spam') &&
+             data.description is string && data.description.size() <= 1000 &&
+             data.status is string && (data.status == 'open' || data.status == 'under_review' || data.status == 'resolved_no_action' || data.status == 'resolved_user_suspended');
+    }
+
+
+    // ==========================================
+    // PATH SPECIFIC POLICIES
+    // ==========================================
+
+    // 1. Citizen Profiles
+    match /users/{userId} {
+      allow get: if isSignedIn() && isValidId(userId);
+      // List operations protected by security query limits (users query for specific user identifiers)
+      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+
+      allow create: if isSignedIn() && userId == request.auth.uid && isValidId(userId) &&
+                       isValidUser(incoming()) && 
+                       incoming().userId == request.auth.uid &&
+                       incoming().reputationScore == 10 &&
+                       incoming().verificationStatus == 1 &&
+                       incoming().accountStatus == 'active' &&
+                       incoming().createdAt == request.time;
+
+      allow update: if isSignedIn() && userId == request.auth.uid &&
+                       isValidUser(incoming()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().username == existing().username &&
+                       incoming().phoneNumber == existing().phoneNumber &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().reputationScore == existing().reputationScore &&
+                       incoming().verificationStatus == existing().verificationStatus &&
+                       incoming().accountStatus == existing().accountStatus &&
+                       (
+                         // Action: Only allow editing specific personal bio parameters
+                         incoming().diff(existing()).affectedKeys().hasOnly(['fullName', 'province', 'district', 'municipality', 'wardNumber', 'currentLocation', 'skills', 'interests', 'profilePhoto', 'gender', 'dateOfBirth', 'email', 'updatedAt'])
+                       );
+
+      allow delete: if isAdmin() && isValidId(userId);
+
+      // Subcollection: Verifications (Tracking phone/doc verification stages milestones)
+      match /verifications/{verificationId} {
+        allow read: if isOwner(userId) || isAdmin();
+        allow create: if isOwner(userId) && isValidId(verificationId) && 
+                         isValidVerificationLog(incoming()) &&
+                         (incoming().level == 1) &&  // Level 1 can be auto-registered by owner (OTP loop validation)
+                         incoming().verifiedAt == request.time;
+        
+        allow update: if isAdmin();
+        allow delete: if isAdmin();
+      }
+
+      // Subcollection: Auditable Security logs
+      match /securityLogs/{logId} {
+        allow read: if isOwner(userId) || isAdmin();
+        allow create: if isOwner(userId) && isValidId(logId) &&
+                         isValidSecurityLog(incoming()) &&
+                         incoming().userId == request.auth.uid &&
+                         incoming().timestamp == request.time;
+        allow update, delete: if false; // Logs are strictly write-once immutable records
+      }
+    }
+
+    // 2. Communities Metadata Directory (Demographics)
+    match /communities/{communityId} {
+      allow read: if isSignedIn();
+      allow create, update, delete: if isAdmin() && isValidId(communityId) && isValidCommunityNode(incoming());
+    }
+
+    // 3. Communications Hub (Personal, Groups, Community Chats)
+    match /chatRooms/{roomId} {
+      allow read: if isSignedIn() && isValidId(roomId) && resource.data.members.hasAny([request.auth.uid]);
+      
+      allow create: if isSignedIn() && isValidId(roomId) && 
+                       isValidChatRoom(incoming()) &&
+                       incoming().createdBy == request.auth.uid &&
+                       incoming().members.hasAny([request.auth.uid]) &&
+                       incoming().createdAt == request.time;
+      
+      allow update: if isSignedIn() && isValidId(roomId) &&
+                       existing().members.hasAny([request.auth.uid]) &&
+                       isValidChatRoom(incoming()) &&
+                       incoming().roomId == existing().roomId &&
+                       incoming().createdBy == existing().createdBy &&
+                       incoming().createdAt == existing().createdAt &&
+                       (
+                         // Action: Adding/removing members or renaming group
+                         incoming().diff(existing()).affectedKeys().hasOnly(['members', 'name'])
+                       );
+
+      allow delete: if isSignedIn() && isValidId(roomId) && existing().createdBy == request.auth.uid;
+
+      // Subcollection: Messages
+      match /messages/{messageId} {
+        // Enforce the Golden master gate rule: User MUST be a current verified member in parent room to read/write messages
+        allow read, write: if isSignedIn() && 
+                             get(/databases/$(database)/documents/chatRooms/$(roomId)).data.members.hasAny([request.auth.uid]);
+
+        allow create: if isSignedIn() && isValidId(messageId) &&
+                         isValidMessage(incoming()) &&
+                         incoming().senderId == request.auth.uid &&
+                         incoming().timestamp == request.time;
+
+        allow update: if false; // Chat histories are immutable to safeguard legal interactions
+        allow delete: if isSignedIn() && existing().senderId == request.auth.uid;
+      }
+    }
+
+    // 4. Services Directory
+    match /services/{providerId} {
+      allow read: if isSignedIn() && isValidId(providerId);
+      
+      allow create: if isSignedIn() && isValidId(providerId) &&
+                       isValidServiceProvider(incoming()) &&
+                       incoming().userId == request.auth.uid &&
+                       incoming().rating == 0.0 &&
+                       incoming().reviewsCount == 0 &&
+                       incoming().isVerifiedProvider == false; // System only flags verification
+
+      allow update: if isSignedIn() && isValidId(providerId) &&
+                       incoming().userId == existing().userId &&
+                       isValidServiceProvider(incoming()) &&
+                       (
+                         // Action Option A: User updating their profile card details
+                         (existing().userId == request.auth.uid && 
+                          incoming().rating == existing().rating && 
+                          incoming().reviewsCount == existing().reviewsCount && 
+                          incoming().isVerifiedProvider == existing().isVerifiedProvider && 
+                          incoming().diff(existing()).affectedKeys().hasOnly(['name', 'category', 'phone', 'serviceArea', 'description', 'cost'])) ||
+                         
+                         // Action Option B: Star-Ratings calculations triggered from Reviews Subcollection
+                         (incoming().diff(existing()).affectedKeys().hasOnly(['rating', 'reviewsCount'])) ||
+
+                         // Support admin edits
+                         isAdmin()
+                       );
+
+      allow delete: if isSignedIn() && (existing().userId == request.auth.uid || isAdmin());
+
+      // Reviews subcollection
+      match /reviews/{reviewId} {
+        allow read: if isSignedIn();
+        allow create: if isSignedIn() && isValidId(reviewId) &&
+                         isValidReview(incoming()) &&
+                         incoming().reviewerId == request.auth.uid &&
+                         incoming().createdAt == request.time;
+        allow update, delete: if isSignedIn() && (existing().reviewerId == request.auth.uid || isAdmin());
+      }
+    }
+
+    // 5. Haat-Bazaar Marketplace Directory
+    match /marketplace/{listingId} {
+      allow read: if isSignedIn() && isValidId(listingId);
+      
+      allow create: if isSignedIn() && isValidId(listingId) &&
+                       isValidMarketplaceListing(incoming()) &&
+                       incoming().sellerId == request.auth.uid &&
+                       incoming().availabilityStatus == 'available' &&
+                       incoming().createdAt == request.time;
+
+      allow update: if isSignedIn() && isValidId(listingId) &&
+                       incoming().sellerId == existing().sellerId &&
+                       incoming().createdAt == existing().createdAt &&
+                       isValidMarketplaceListing(incoming()) &&
+                       (
+                         // Action Option A: Only seller altering standard details or marking Sold/Rented
+                         (existing().sellerId == request.auth.uid &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'price', 'category', 'listingType', 'sellerPhone', 'availabilityStatus'])) ||
+                         
+                         // Action Option B: Community booking / checkout holding item status (transitioning to pending)
+                         (existing().availabilityStatus == 'available' &&
+                          incoming().availabilityStatus == 'pending' &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['availabilityStatus']))
+                       );
+
+      allow delete: if isSignedIn() && (existing().sellerId == request.auth.uid || isAdmin());
+    }
+
+    // 6. Guhar Help Center Directory
+    match /helpRequests/{requestId} {
+      allow read: if isSignedIn() && isValidId(requestId);
+      
+      allow create: if isSignedIn() && isValidId(requestId) &&
+                       isValidHelpRequest(incoming()) &&
+                       incoming().contactPhone is string && // Guhar SOS requires valid call routes
+                       incoming().status == 'open' &&
+                       incoming().createdAt == request.time;
+
+      allow update: if isSignedIn() && isValidId(requestId) &&
+                       isValidHelpRequest(incoming()) &&
+                       (
+                         // Action Option A: Original author coordinates modifications or closes the SOS
+                         (existing().contactPhone == incoming().contactPhone &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'category', 'urgency', 'contactName', 'lookingFor', 'status'])) ||
+
+                         // Action Option B: Neighbors marking is as pending or applying aid assistance
+                         (existing().status == 'open' &&
+                          incoming().status == 'resolved' &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['status'])) ||
+                         
+                         isAdmin()
+                       );
+
+      allow delete: if isSignedIn() && (existing().contactName == incoming().contactName || isAdmin());
+    }
+
+    // 7. Local Jobs Directory
+    match /jobs/{jobId} {
+      allow read: if isSignedIn() && isValidId(jobId);
+      
+      allow create: if isSignedIn() && isValidId(jobId) &&
+                       isValidJobListing(incoming()) &&
+                       incoming().employerId == request.auth.uid &&
+                       incoming().createdAt == request.time;
+
+      allow update: if isSignedIn() && isValidId(jobId) &&
+                       incoming().employerId == existing().employerId &&
+                       incoming().createdAt == existing().createdAt &&
+                       isValidJobListing(incoming()) &&
+                       (
+                         (existing().employerId == request.auth.uid &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'payment', 'type', 'skillRequirements', 'province', 'district', 'municipality'])) ||
+                         
+                         isAdmin()
+                       );
+
+      allow delete: if isSignedIn() && (existing().employerId == request.auth.uid || isAdmin());
+
+      // Applications files
+      match /applications/{applicationId} {
+        allow read: if isSignedIn() && 
+                       (existing().applicantId == request.auth.uid || 
+                        get(/databases/$(database)/documents/jobs/$(jobId)).data.employerId == request.auth.uid || 
+                        isAdmin());
+
+        allow create: if isSignedIn() && isValidId(applicationId) &&
+                         isValidJobApplication(incoming()) &&
+                         incoming().applicantId == request.auth.uid &&
+                         incoming().jobId == jobId &&
+                         incoming().status == 'pending' &&
+                         incoming().createdAt == request.time;
+
+        allow update: if isSignedIn() &&
+                         isValidJobApplication(incoming()) &&
+                         incoming().jobId == jobId &&
+                         incoming().applicantId == existing().applicantId &&
+                         incoming().createdAt == existing().createdAt &&
+                         (
+                           // Action Option A: Employer upgrading state to shortlisted or accepted
+                           (get(/databases/$(database)/documents/jobs/$(jobId)).data.employerId == request.auth.uid &&
+                            incoming().diff(existing()).affectedKeys().hasOnly(['status'])) ||
+                           
+                           // Action Option B: Cancel application
+                           (existing().applicantId == request.auth.uid &&
+                            incoming().status == 'rejected' &&
+                            incoming().diff(existing()).affectedKeys().hasOnly(['status'])) ||
+
+                           isAdmin()
+                         );
+
+        allow delete: if isSignedIn() && (existing().applicantId == request.auth.uid || isAdmin());
+      }
+    }
+
+    // 8. Security Audits & Fraud Reports Ledger
+    match /reports/{reportId} {
+      allow read: if isAdmin();
+      
+      allow create: if isSignedIn() && isValidId(reportId) &&
+                       isValidReport(incoming()) &&
+                       incoming().reporterId == request.auth.uid &&
+                       incoming().status == 'open' &&
+                       incoming().createdAt == request.time;
+
+      allow update: if isAdmin() && 
+                       isValidReport(incoming()) &&
+                       incoming().reportId == existing().reportId &&
+                       incoming().createdAt == existing().createdAt;
+
+      allow delete: if false; // All citizen-reported fraud sheets are preserved as legal audit registries
+    }
+
+  }
+}
